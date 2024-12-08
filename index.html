@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secure File Upload and Solana Storage</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 20px;
+    }
+    .container {
+      margin: auto;
+      padding: 20px;
+      border: 2px dashed #007bff;
+      border-radius: 10px;
+      width: 300px;
+    }
+    input[type="file"], input[type="text"] {
+      margin: 10px 0;
+      width: 90%;
+      padding: 5px;
+    }
+    button {
+      padding: 10px 20px;
+      color: white;
+      background-color: #007bff;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    #message {
+      margin-top: 20px;
+    }
+  </style>
+  <!-- Import Solana Web3.js and CryptoJS -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+</head>
+<body>
+  <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.js"></script>
+  <h1>Secure File Upload and Solana Storage</h1>
+
+  <!-- Connect Phantom Wallet -->
+  <div class="container">
+    <h2>Connect Phantom Wallet</h2>
+    <button id="connectWallet">Connect Wallet</button>
+    <div id="walletStatus"></div>
+  </div>
+
+  <!-- Upload Section -->
+  <div class="container">
+    <h2>Upload File</h2>
+    <form id="uploadForm">
+      <input type="file" id="fileInput" name="file" required />
+      <button type="submit">Upload File</button>
+    </form>
+    <div id="uploadMessage"></div>
+  </div>
+
+  <script>
+    
+    // Global variables
+    let walletAddress = null;
+
+    // Step 1: Connect Phantom Wallet
+    document.getElementById("connectWallet").addEventListener("click", async () => {
+      const provider = window.solana;
+
+      if (!provider || !provider.isPhantom) {
+        alert("Phantom wallet not detected. Please install Phantom Wallet.");
+        return;
+      }
+
+      try {
+        // Request wallet connection
+        const response = await provider.connect();
+        walletAddress = response.publicKey.toString();
+        document.getElementById("walletStatus").innerText = `Wallet Connected: ${walletAddress}`;
+        console.log("Connected to wallet:", walletAddress);
+      } catch (err) {
+        console.error("Error connecting to Phantom:", err);
+        alert("Failed to connect to Phantom.");
+      }
+    });
+
+    // Step 2: Helper functions for file upload and encryption
+    async function readFileAsBinary(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsBinaryString(file);
+      });
+    }
+
+    function generateEncryptionKey() {
+      const key = CryptoJS.lib.WordArray.random(16);
+      return CryptoJS.enc.Base64.stringify(key);
+    }
+
+    async function encryptFile(file, key) {
+      const binaryData = await readFileAsBinary(file);
+      const encrypted = CryptoJS.AES.encrypt(binaryData, key).toString();
+      return new Blob([encrypted], { type: 'text/plain' });
+    }
+
+    async function uploadToPinata(file) {
+      const apiKey = 'f7b770e84098104f4947'; // Replace with your Pinata API key
+      const apiSecret = '6ee68dc0a40a9b9094c96f1b354e2ea2844c764e6cb3173dc0df6cb00e6453f1'; // Replace with your Pinata secret key
+      const url = `https://api.pinata.cloud/pinning/pinFileToIPFS`;
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'pinata_api_key': apiKey,
+          'pinata_secret_api_key': apiSecret,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to upload: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      return data.IpfsHash;
+    }
+
+    // Step 3: Store CID on Solana
+    async function storeCidOnSolana(cid) {
+  const provider = window.solana;
+
+  if (!provider || !walletAddress) {
+    alert("Connect Phantom Wallet first!");
+    return;
+  }
+
+  const connection = new solanaWeb3.Connection(solanaWeb3.clusterApiUrl("devnet"), "confirmed");
+
+  // Convert CID to a Buffer
+  const cidBuffer = new TextEncoder().encode(cid);
+
+  const memoInstruction = new solanaWeb3.TransactionInstruction({
+    keys: [],
+    programId: new solanaWeb3.PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), // Solana Memo Program
+    data: cidBuffer, // CID to store
+  });
+
+  const transaction = new solanaWeb3.Transaction().add(memoInstruction);
+
+  try {
+    // Fetch recent blockhash and set fee payer
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = new solanaWeb3.PublicKey(walletAddress);
+
+    // Request wallet to sign the transaction
+    const signedTransaction = await provider.signTransaction(transaction);
+
+    // Send the signed transaction
+    const signature = await connection.sendRawTransaction(signedTransaction.serialize());
+    await connection.confirmTransaction(signature, "confirmed");
+
+    console.log("Transaction Signature:", signature);
+    alert(`CID successfully stored on Solana! Transaction Signature: ${signature}`);
+    document.getElementById("uploadMessage").innerText = "Stored CID on Solana";
+  } catch (error) {
+    console.error("Error storing CID:", error);
+    alert("Failed to store CID on Solana.");
+  }
+}
+
+
+
+
+    // Step 4: Handle file upload
+    document.getElementById("uploadForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const fileInput = document.getElementById("fileInput");
+      const file = fileInput.files[0];
+
+      if (!file) {
+        alert("Please select a file to upload.");
+        return;
+      }
+
+      if (!walletAddress) {
+        alert("Please connect your Phantom Wallet first.");
+        return;
+      }
+
+      document.getElementById("uploadMessage").innerText = "Encrypting file...";
+      try {
+        const encryptionKey = generateEncryptionKey();
+        console.log("Encryption Key:", encryptionKey);
+
+        const encryptedBlob = await encryptFile(file, encryptionKey);
+        document.getElementById("uploadMessage").innerText = "Uploading to Pinata...";
+        const cid = await uploadToPinata(encryptedBlob);
+
+        document.getElementById("uploadMessage").innerText = `File uploaded successfully! CID: ${cid}`;
+        console.log("Access your file with CID:", cid);
+
+        // Store the CID on Solana
+        document.getElementById("uploadMessage").innerText = "Storing CID on Solana...";
+        await storeCidOnSolana(cid);
+
+      } catch (error) {
+        console.error("Error:", error);
+        document.getElementById("uploadMessage").innerText = "An error occurred during upload.";
+      }
+    });
+  </script>
+</body>
+</html>
