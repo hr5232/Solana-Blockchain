@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Secure File Upload and Solana Storage</title>
+  <title>Secure File Upload and Retrieval</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -33,18 +33,17 @@
     button:hover {
       background-color: #0056b3;
     }
-    #message {
+    #uploadMessage, #retrieveMessage {
       margin-top: 20px;
     }
   </style>
-  <!-- Import Solana Web3.js and CryptoJS -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.js"></script>
 </head>
 <body>
-  <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.js"></script>
-  <h1>Secure File Upload and Solana Storage</h1>
+  <h1>Secure File Upload and Retrieval</h1>
 
-  <!-- Connect Phantom Wallet -->
+   <!-- Connect Phantom Wallet -->
   <div class="container">
     <h2>Connect Phantom Wallet</h2>
     <button id="connectWallet">Connect Wallet</button>
@@ -55,14 +54,25 @@
   <div class="container">
     <h2>Upload File</h2>
     <form id="uploadForm">
-      <input type="file" id="fileInput" name="file" required />
+      <input type="file" id="fileInput" required />
       <button type="submit">Upload File</button>
     </form>
     <div id="uploadMessage"></div>
   </div>
 
+  <!-- Retrieve Section -->
+  <div class="container">
+    <h2>Retrieve File</h2>
+    <form id="retrieveForm">
+      <input type="text" id="cidInput" placeholder="Enter CID" required />
+      <input type="text" id="keyInput" placeholder="Enter Decryption Key" required />
+      <button type="submit">Retrieve File</button>
+    </form>
+    <div id="retrieveMessage"></div>
+  </div>
+
   <script>
-    
+
     // Global variables
     let walletAddress = null;
 
@@ -87,31 +97,29 @@
       }
     });
 
-    // Step 2: Helper functions for file upload and encryption
-    async function readFileAsBinary(file) {
+
+    // Helper functions for file upload and encryption
+    async function readFileAsBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsBinaryString(file);
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
       });
     }
 
-    function generateEncryptionKey() {
-      const key = CryptoJS.lib.WordArray.random(16);
-      return CryptoJS.enc.Base64.stringify(key);
-    }
-
     async function encryptFile(file, key) {
-      const binaryData = await readFileAsBinary(file);
-      const encrypted = CryptoJS.AES.encrypt(binaryData, key).toString();
-      return new Blob([encrypted], { type: 'text/plain' });
+      const base64Data = await readFileAsBase64(file);
+      const mimeType = file.type;
+      const metadata = JSON.stringify({ mimeType });
+      const encryptedData = CryptoJS.AES.encrypt(metadata + "|" + base64Data, key).toString();
+      return new Blob([encryptedData], { type: "text/plain" });
     }
 
     async function uploadToPinata(file) {
-      const apiKey = 'f7b770e84098104f4947'; // Replace with your Pinata API key
-      const apiSecret = '6ee68dc0a40a9b9094c96f1b354e2ea2844c764e6cb3173dc0df6cb00e6453f1'; // Replace with your Pinata secret key
-      const url = `https://api.pinata.cloud/pinning/pinFileToIPFS`;
+      const apiKey = 'f7b770e84098104f4947';
+      const apiSecret = '6ee68dc0a40a9b9094c96f1b354e2ea2844c764e6cb3173dc0df6cb00e6453f1';
+      const url = "https://api.pinata.cloud/pinning/pinFileToIPFS";
       const formData = new FormData();
       formData.append('file', file);
 
@@ -124,16 +132,12 @@
         body: formData,
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to upload: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      return data.IpfsHash;
+      if (!response.ok) throw new Error(`Failed to upload: ${response.statusText}`);
+      return (await response.json()).IpfsHash;
     }
 
-    // Step 3: Store CID on Solana
-    async function storeCidOnSolana(cid) {
+     // Step 3: Store CID on Solana
+     async function storeCidOnSolana(cid) {
   const provider = window.solana;
 
   if (!provider || !walletAddress) {
@@ -160,62 +164,69 @@
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = new solanaWeb3.PublicKey(walletAddress);
 
-    // Request wallet to sign the transaction
-    const signedTransaction = await provider.signTransaction(transaction);
+     // Request wallet to sign the transaction
+     const signedTransaction = await provider.signTransaction(transaction);
 
-    // Send the signed transaction
-    const signature = await connection.sendRawTransaction(signedTransaction.serialize());
-    await connection.confirmTransaction(signature, "confirmed");
+// Send the signed transaction
+const signature = await connection.sendRawTransaction(signedTransaction.serialize());
+await connection.confirmTransaction(signature, "confirmed");
 
-    console.log("Transaction Signature:", signature);
-    alert(`CID successfully stored on Solana! Transaction Signature: ${signature}`);
-    document.getElementById("uploadMessage").innerText = "Stored CID on Solana";
-  } catch (error) {
-    console.error("Error storing CID:", error);
-    alert("Failed to store CID on Solana.");
-  }
+console.log("Transaction Signature:", signature);
+alert(`CID successfully stored on Solana! Transaction Signature: ${signature}`);
+document.getElementById("uploadMessage").innerText = "Stored CID on Solana";
+} catch (error) {
+console.error("Error storing CID:", error);
+alert("Failed to store CID on Solana.");
+}
 }
 
-
-
-
-    // Step 4: Handle file upload
-    document.getElementById("uploadForm").addEventListener("submit", async (event) => {
+    async function handleUpload(event) {
       event.preventDefault();
-      const fileInput = document.getElementById("fileInput");
-      const file = fileInput.files[0];
-
-      if (!file) {
-        alert("Please select a file to upload.");
-        return;
-      }
+      const file = document.getElementById("fileInput").files[0];
+      if (!file) return alert("No file selected!");
 
       if (!walletAddress) {
         alert("Please connect your Phantom Wallet first.");
         return;
       }
 
-      document.getElementById("uploadMessage").innerText = "Encrypting file...";
-      try {
-        const encryptionKey = generateEncryptionKey();
-        console.log("Encryption Key:", encryptionKey);
+      const key = CryptoJS.lib.WordArray.random(16).toString(CryptoJS.enc.Hex);
+      console.log("Encryption Key:", key);
 
-        const encryptedBlob = await encryptFile(file, encryptionKey);
-        document.getElementById("uploadMessage").innerText = "Uploading to Pinata...";
-        const cid = await uploadToPinata(encryptedBlob);
-
-        document.getElementById("uploadMessage").innerText = `File uploaded successfully! CID: ${cid}`;
-        console.log("Access your file with CID:", cid);
-
+      const encryptedBlob = await encryptFile(file, key);
+      document.getElementById("uploadMessage").innerText = "Uploading to Pinata...";
+      const cid = await uploadToPinata(encryptedBlob);
+      document.getElementById("uploadMessage").innerText = `File uploaded! CID: ${cid}`;
+ 
         // Store the CID on Solana
         document.getElementById("uploadMessage").innerText = "Storing CID on Solana...";
         await storeCidOnSolana(cid);
 
-      } catch (error) {
-        console.error("Error:", error);
-        document.getElementById("uploadMessage").innerText = "An error occurred during upload.";
-      }
-    });
+      } 
+    function decryptFile(encryptedData, key) {
+      const decrypted = CryptoJS.AES.decrypt(encryptedData, key).toString(CryptoJS.enc.Utf8);
+      const [metadata, base64Data] = decrypted.split("|");
+      const { mimeType } = JSON.parse(metadata);
+      return { mimeType, data: atob(base64Data) };
+    }
+
+    async function handleRetrieve(event) {
+      event.preventDefault();
+      const cid = document.getElementById("cidInput").value.trim();
+      const key = document.getElementById("keyInput").value.trim();
+      const response = await fetch(`https://gateway.pinata.cloud/ipfs/${cid}`);
+      const encryptedData = await response.text();
+
+      const { mimeType, data } = decryptFile(encryptedData, key);
+      const blob = new Blob([new Uint8Array(data.split("").map((c) => c.charCodeAt(0)))], { type: mimeType });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "retrieved_file";
+      link.click();
+    }
+
+    document.getElementById("uploadForm").addEventListener("submit", handleUpload);
+    document.getElementById("retrieveForm").addEventListener("submit", handleRetrieve);
   </script>
 </body>
 </html>
